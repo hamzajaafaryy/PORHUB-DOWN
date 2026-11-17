@@ -1,13 +1,21 @@
 import { lookup } from "node:dns/promises";
-import { NextRequest, NextResponse } from "next/server";
-import { Readable } from "node:stream";
 import { isIP } from "node:net";
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 300 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-m4v", "video/ogg"]);
+
+function allowedHosts() {
+  return (process.env.DOWNLOAD_ALLOWED_HOSTS || "")
+    .split(",").map(host => host.trim().toLowerCase()).filter(Boolean);
+}
+
+function hostIsAllowed(host: string, allowed: string[]) {
+  return allowed.some(domain => host === domain || host.endsWith("." + domain));
+}
 
 function isPublicIp(ip: string) {
   if (isIP(ip) === 4) {
@@ -25,56 +33,77 @@ function isPublicIp(ip: string) {
     !normalized.startsWith("::ffff:192.168.");
 }
 
-async function validatePublicHost(url: URL) {
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Only HTTP and HTTPS links are supported.");
+async function validateSource(url: URL, allowed: string[]) {
+  if (url.protocol !== "https:") throw new Error("Only HTTPS video links are accepted.");
   if (url.username || url.password) throw new Error("URLs containing login credentials are not accepted.");
   const host = url.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) throw new Error("Private network addresses are not allowed.");
+  if (!hostIsAllowed(host, allowed)) throw new Error("This source host is not enabled. Add its domain to DOWNLOAD_ALLOWED_HOSTS in your Vercel project settings.");
   if (isIP(host)) {
     if (!isPublicIp(host)) throw new Error("Private network addresses are not allowed.");
     return;
   }
   const addresses = await lookup(host, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some(entry => !isPublicIp(entry.address))) throw new Error("The source host does not resolve to a public address.");
+  if (!addresses.length || addresses.some(entry => !isPublicIp(entry.address))) {
+    throw new Error("The source host does not resolve exclusively to public addresses.");
+  }
 }
 
 function safeFilename(value: string) {
   const cleaned = value.replace(/[\\/\r\n"<>:*?|\x00-\x1f]/g, "_").trim().slice(0, 120);
-  return cleaned || "video-download";
+  return cleaned || "video-download.mp4";
 }
 
 export async function GET(request: NextRequest) {
+  const allowed = allowedHosts();
+  if (!allowed.length) {
+    return NextResponse.json({ error: "Downloads are not configured yet. The site owner must add approved source domains to DOWNLOAD_ALLOWED_HOSTS in Vercel." }, { status: 503 });
+  }
+
   const raw = request.nextUrl.searchParams.get("url");
   if (!raw || raw.length > 4096) return NextResponse.json({ error: "Please provide a valid direct video URL." }, { status: 400 });
 
   let current: URL;
-  try { current = new URL(raw); await validatePublicHost(current); }
-  catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid URL." }, { status: 400 }); }
-
-  let upstream: Response | null = null;
   try {
+    current = new URL(raw);
+    await validateSource(current, allowed);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid source URL." }, { status: 400 });
+  }
+
+  try {
+    let upstream: Response | null = null;
     for (let hop = 0; hop <= 3; hop++) {
-      upstream = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(25000), headers: { "user-agent": "PorHubDown/1.0" }, cache: "no-store" });
+      upstream = await fetch(current, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(25000),
+        headers: { "user-agent": "PorHubDown/1.0" },
+        cache: "no-store"
+      });
       if ([301, 302, 303, 307, 308].includes(upstream.status)) {
         const location = upstream.headers.get("location");
         if (!location || hop === 3) return NextResponse.json({ error: "Too many or invalid redirects from the source." }, { status: 502 });
-        const next = new URL(location, current);
-        await validatePublicHost(next);
-        current = next;
+        current = new URL(location, current);
+        await validateSource(current, allowed);
         continue;
       }
       break;
     }
-    if (!upstream || !upstream.ok || !upstream.body) return NextResponse.json({ error: "The source did not provide a downloadable file." }, { status: 502 });
+
+    if (!upstream || !upstream.ok || !upstream.body) {
+      return NextResponse.json({ error: "The source did not provide a downloadable file." }, { status: 502 });
+    }
 
     const type = (upstream.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (!ALLOWED_TYPES.has(type)) return NextResponse.json({ error: "The link did not return a supported video file. Use a direct MP4, WebM, MOV, M4V, or OGV URL." }, { status: 415 });
+    if (!ALLOWED_TYPES.has(type)) {
+      return NextResponse.json({ error: "The source did not return a supported video MIME type." }, { status: 415 });
+    }
 
     const length = Number(upstream.headers.get("content-length") || 0);
     if (length > MAX_BYTES) return NextResponse.json({ error: "This file exceeds the 300 MB download limit." }, { status: 413 });
 
-    const urlName = decodeURIComponent(current.pathname.split("/").pop() || "video-download").replace(/\+/g, " ");
-    const filename = safeFilename(urlName.includes(".") ? urlName : "video-download." + (type === "video/webm" ? "webm" : type === "video/quicktime" ? "mov" : type === "video/ogg" ? "ogv" : "mp4"));
+    let pathName = "video-download.mp4";
+    try { pathName = decodeURIComponent(current.pathname.split("/").pop() || pathName); } catch { /* keep fallback */ }
+    const filename = safeFilename(pathName.includes(".") ? pathName : "video-download.mp4");
     let bytes = 0;
     const limited = upstream.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
@@ -86,6 +115,7 @@ export async function GET(request: NextRequest) {
         controller.enqueue(chunk);
       }
     }));
+
     return new NextResponse(limited, {
       headers: {
         "Content-Type": type,
@@ -96,6 +126,6 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch {
-    return NextResponse.json({ error: "Download failed. The source may be unavailable, slow, or blocking server-side access." }, { status: 502 });
+    return NextResponse.json({ error: "Download failed. The source may be unavailable, too slow, or blocking server-side access." }, { status: 502 });
   }
 }
