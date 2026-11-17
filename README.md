@@ -1,11 +1,29 @@
 # PorHub Down
 
-A responsive Next.js direct-video downloader for public media-file URLs that the visitor owns or is authorized to save.
+A Pornhub-focused link checker and direct-video downloader built with Next.js 15, React 19, and TypeScript.
 
-## Stack
-- Next.js 15 / React 19 / TypeScript
-- Node.js streaming download route at `/api/download`
-- Responsive custom CSS, metadata, Open Graph, robots.txt and sitemap
+## Important platform behavior
+A Pornhub watch-page URL (for example, `/view_video.php?viewkey=...`) is a webpage, not a direct media-file URL. This project recognizes supported watch-page URLs but does not extract or decrypt player streams, bypass authentication, defeat DRM, or circumvent platform download restrictions. For content you own or are authorized to save, use an official creator download/export method and provide an accessible direct video-file URL where permitted.
+
+## Direct-file downloads
+The `/api/download` route streams supported direct video files as attachments. It accepts HTTPS URLs only and checks:
+- Explicit source-domain allowlist via `DOWNLOAD_ALLOWED_HOSTS`
+- Public DNS/IP destinations
+- Redirect destinations (maximum three redirects)
+- Video MIME type (MP4, WebM, MOV, M4V, OGV)
+- 300 MB maximum response size
+- 25-second upstream request timeout
+
+The app does not intentionally store downloaded videos. Some hosts block server-side requests, require authorization, or do not permit server-side downloads; those sources will not work.
+
+## Configure on Vercel
+In Project Settings → Environment Variables, add:
+
+```text
+DOWNLOAD_ALLOWED_HOSTS=media.example.com,cdn.example.net
+```
+
+Use only domains you trust and have permission to download from. Include the exact hostnames that serve your authorized direct media files. Do not add broad unrelated domains. Redeploy after changing the variable. With no allowlist configured, the download endpoint returns HTTP 503 by design.
 
 ## Run locally
 ```bash
@@ -14,18 +32,8 @@ npm run dev
 ```
 Open http://localhost:3000.
 
-## How downloads work
-- Paste an accessible direct URL to an MP4, WebM, MOV, M4V, or OGV file.
-- The server checks HTTP/HTTPS, rejects private/local network destinations, limits redirects, validates the returned video MIME type, and streams the file as an attachment.
-- Maximum download size: 300 MB. Files are streamed and are not intentionally stored on the application server.
-- Some hosts block server-side requests or require cookies, login, or signed URLs. Those sources may not work.
-- The downloader does not support webpage/watch-page URLs as media sources.
-
-## Platform restrictions
-Pornhub watch-page URLs are not direct media files. This app does not scrape player streams, decrypt media, bypass authentication, defeat DRM, or evade platform download controls. For creator-owned media, use the platform's official creator download/export feature and provide an accessible direct file URL where downloads are permitted.
-
-## Security notes
-The download route accepts only HTTP/HTTPS URLs, rejects credentials and private/local destinations after DNS resolution, revalidates redirects, restricts response MIME types, applies a 300 MB limit, and disables caching. Do not expose this endpoint to untrusted high-volume traffic without rate limiting and infrastructure-level abuse controls.
-
 ## Deploy
-Import this repository into Vercel and use the default Next.js build settings. The route requires the Node.js runtime.
+Import this repository into Vercel and use the default Next.js build settings. The download route uses the Node.js runtime. Configure the environment variable above before expecting direct-file downloads to work.
+
+## Abuse prevention
+For a public production service, add rate limiting and request quotas at the edge or through a trusted service. Keep the source-host allowlist narrow. Do not use this service to download content without permission.
