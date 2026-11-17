@@ -3,12 +3,20 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://porhub-down.vercel.app"),
-  title: { default: "PorHub Down — Video Download Helper", template: "%s | PorHub Down" },
-  description: "A simple video download helper for direct video files you own or are authorized to download.",
+  title: { default: "PorHub Down — Pornhub Link Checker & Video Downloader", template: "%s | PorHub Down" },
+  description: "Check Pornhub watch-page links and download authorized direct video files in MP4, WebM, MOV, M4V, and OGV formats.",
   applicationName: "PorHub Down",
   robots: { index: true, follow: true },
-  openGraph: { title: "PorHub Down", description: "A clean, simple helper for authorized video downloads.", type: "website" },
-  twitter: { card: "summary_large_image", title: "PorHub Down", description: "Download direct video files you are authorized to save." }
+  openGraph: {
+    title: "PorHub Down — Video Downloader",
+    description: "A straightforward Pornhub link checker and authorized direct video-file downloader.",
+    type: "website"
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "PorHub Down — Video Downloader",
+    description: "Check video links and download supported direct media files."
+  }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
